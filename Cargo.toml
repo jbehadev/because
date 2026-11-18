@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/because-core", "crates/because-tui", "crates/because-cli", "crates/because-agent", "crates/because-git", "crates/because-store"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+because-core = { path = "crates/because-core" }
+because-tui  = { path = "crates/because-tui" }
+because-agent = { path = "crates/because-agent" }
+because-git  = { path = "crates/because-git" }
+because-store = { path = "crates/because-store" }
+ratatui = "0.30"
+crossterm = "0.29"
+ratatui-textarea = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
