@@ -45,11 +45,15 @@ platform:
 | Linux, x86_64 (static, no glibc dependency) | `cuz-x86_64-unknown-linux-musl.tar.gz` |
 | Windows, x86_64 | `cuz-x86_64-pc-windows-msvc.zip` |
 
-When you push a tag `v*`, the workflow also publishes a GitHub Release with
-these files and `SHA256SUMS`. To make a release, push a tag:
+Each push to `main` also publishes a GitHub Release with these files and
+`SHA256SUMS`. The release gets the next patch version, for example `v0.1.4`
+after `v0.1.3`. The first release is `v0.1.0`.
+
+To change the minor or major version, push a tag. The next push to `main` then
+continues from that tag:
 
 ```
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 Use the release to install `cuz` without Rust or crates.io. On macOS or Linux,
