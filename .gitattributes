@@ -1,0 +1,15 @@
+# Append-only, content-addressed record log: union-merge instead of conflicting.
+# Safe only because every line is a standalone JSON object, newline-terminated,
+# identified by a content hash, and never edited in place. See
+# docs/design/01-data-model.md §6.
+.because/records/*.jsonl  merge=union -diff
+
+# Content-addressed patch blobs: identical paths always hold identical bytes,
+# so they can never conflict. Never try to merge or diff them.
+.because/blobs/**         binary -diff -merge
+
+# Normalize line endings for sources so patch digests match across platforms.
+*.rs      text eol=lf
+*.md      text eol=lf
+*.toml    text eol=lf
+*.sql     text eol=lf

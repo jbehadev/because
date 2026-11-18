@@ -1,0 +1,14 @@
+[package]
+name = "because-store"
+description = "The local SQLite store: sessions, inputs, steps and file changes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+because-core.workspace = true
+rusqlite.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
