@@ -164,8 +164,8 @@ fn keychain_credentials() -> Result<String> {
 fn file_credentials() -> Result<String> {
     let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")))
-        .context("neither CLAUDE_CONFIG_DIR nor HOME is set")?;
+        .or_else(|| std::env::home_dir().map(|h| h.join(".claude")))
+        .context("neither CLAUDE_CONFIG_DIR nor the home directory is set")?;
     let path = dir.join(".credentials.json");
     std::fs::read_to_string(&path).with_context(|| format!("{}", path.display()))
 }
