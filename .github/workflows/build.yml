@@ -1,0 +1,179 @@
+# Builds `cuz` for macOS (Apple Silicon), Linux (x86_64), and Windows (x86_64).
+# Each runner runs the tests and uploads the binary as a workflow artifact
+# (Actions → this run → Artifacts).
+# A push to `main` also publishes a GitHub Release. The release gets the next
+# patch version: `v0.1.3` → `v0.1.4`. The first release is `v0.1.0`.
+# A push of a tag `v*` (for example `v0.2.0`) publishes a release with that tag.
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # On `main`, a new push waits for the last run. Thus two releases cannot get
+  # the same version, and a stop cannot leave a release without its files.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # An arm64 runner, so the tests run natively on Apple Silicon.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            exe: cuz
+            archive: tar.gz
+          # musl gives a static binary. It runs on all x86_64 Linux systems,
+          # independent of the glibc version.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            exe: cuz
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: cuz.exe
+            archive: zip
+    env:
+      TARGET: ${{ matrix.target }}
+      # macOS 11 is the oldest release that runs on Apple Silicon. Applies to rustc
+      # and to the SQLite that rusqlite compiles from source (the `bundled` feature).
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+      # On Windows, link the C runtime statically. Thus the binary does not
+      # need the Visual C++ Redistributable.
+      RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The fixtures and the snapshots compare bytes. Thus Windows must not
+      # change the line endings at checkout.
+      - name: Keep the line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - name: Install musl-tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install the stable Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target "$TARGET"
+          rustup default stable
+          rustc --version --verbose
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.target }}-cargo-
+
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Test
+        run: cargo test --workspace --locked --target "$TARGET"
+
+      - name: Check the binary
+        run: |
+          bin="target/$TARGET/release/${{ matrix.exe }}"
+          file "$bin" || true
+          if [ "$RUNNER_OS" = macOS ]; then
+            test "$(lipo -archs "$bin")" = arm64
+            otool -l "$bin" | grep -A4 LC_BUILD_VERSION
+          fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            # A static binary links no shared libraries.
+            if ldd "$bin" 2>/dev/null | grep -q '=>'; then
+              echo "$bin is not static"; exit 1
+            fi
+          fi
+          # Renders the sample fixture to stdout; needs no terminal or agent.
+          "$bin" render > /dev/null
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        # A tarball keeps the executable bit, which a zipped artifact drops.
+        run: tar -czf "cuz-$TARGET.tar.gz" -C "target/$TARGET/release" cuz
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path "target/$env:TARGET/release/cuz.exe" -DestinationPath "cuz-$env:TARGET.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          # Uploaded as-is, not zipped: the artifact name is the file name.
+          path: cuz-${{ matrix.target }}.${{ matrix.archive }}
+          archive: false
+          if-no-files-found: error
+
+  release:
+    name: Publish the GitHub Release
+    needs: build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Only this job can write to the repository. It does not run the build.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cuz-*
+          path: dist
+          merge-multiple: true
+
+      - name: Choose the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            last=$(gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+            if [ -z "$last" ]; then
+              tag=v0.1.0
+            else
+              IFS=. read -r major minor patch <<< "${last#v}"
+              tag="v$major.$minor.$((patch + 1))"
+            fi
+          fi
+          echo "Release $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        working-directory: dist
+        # On `main`, `--target` creates the tag on the commit that was built.
+        run: |
+          ls -l
+          test "$(ls cuz-* | wc -l)" -eq 3
+          sha256sum cuz-* > SHA256SUMS
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            cuz-* SHA256SUMS

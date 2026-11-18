@@ -33,21 +33,56 @@ cd /path/to/some/git/repo
 /path/to/because/target/release/cuz
 ```
 
-### Apple Silicon Macs
+### Prebuilt binaries
 
-A macOS arm64 runner builds and tests each push
-(`.github/workflows/macos-arm64.yml`). The **Artifacts** section of the run
-contains `cuz-aarch64-apple-darwin.tar.gz`. This build needs macOS 11 or later.
+The workflow `.github/workflows/build.yml` builds and tests each push on three
+runners. The **Artifacts** section of the run contains one file for each
+platform:
 
-The build does not have a Developer ID signature, and it is not notarized. If
-macOS does not let a downloaded copy run, remove the download flag with
-`xattr -d com.apple.quarantine cuz`.
+| Platform | File |
+|---|---|
+| macOS, Apple Silicon (macOS 11 or later) | `cuz-aarch64-apple-darwin.tar.gz` |
+| Linux, x86_64 (static, no glibc dependency) | `cuz-x86_64-unknown-linux-musl.tar.gz` |
+| Windows, x86_64 | `cuz-x86_64-pc-windows-msvc.zip` |
+
+Each push to `main` also publishes a GitHub Release with these files and
+`SHA256SUMS`. The release gets the next patch version, for example `v0.1.4`
+after `v0.1.3`. The first release is `v0.1.0`.
+
+To change the minor or major version, push a tag. The next push to `main` then
+continues from that tag:
 
 ```
-tar xzf cuz-aarch64-apple-darwin.tar.gz    # extracts cuz
-cd /path/to/some/git/repo
-/path/to/cuz
+git tag v0.2.0 && git push origin v0.2.0
 ```
+
+Use the release to install `cuz` without Rust or crates.io. On macOS or Linux,
+use the file for your platform:
+
+```
+mkdir -p ~/.local/bin
+curl -fsSL https://github.com/jbehadev/because/releases/latest/download/cuz-aarch64-apple-darwin.tar.gz \
+  | tar -xz -C ~/.local/bin
+```
+
+Make sure that `~/.local/bin` is in your `PATH`.
+
+On Windows, use PowerShell:
+
+```
+$dir = "$env:LOCALAPPDATA\Programs\cuz"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Invoke-WebRequest https://github.com/jbehadev/because/releases/latest/download/cuz-x86_64-pc-windows-msvc.zip -OutFile "$env:TEMP\cuz.zip"
+Expand-Archive -Force "$env:TEMP\cuz.zip" $dir
+```
+
+Then add that directory to your `PATH`. On Windows, `!` runs the command with
+`cmd.exe`.
+
+The binaries do not have a code signature. If macOS does not let a downloaded
+copy run, remove the download flag with `xattr -d com.apple.quarantine cuz`.
+If Windows SmartScreen stops the program, select **More info**, then
+**Run anyway**.
 
 ## Use
 
