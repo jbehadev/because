@@ -312,3 +312,15 @@ fn a_focused_sessions_column_widens_when_it_stands_beside_one_other() {
     let three = shown(&frame(&m, 110, 30)).expect("session listed");
     assert!(wide.chars().count() > three.chars().count(), "{wide:?} vs {three:?}");
 }
+
+#[test]
+fn a_long_next_input_wraps_onto_more_rows_instead_of_a_horizontal_scroll() {
+    let mut m = model();
+    // Each word is unique, so the test can find each one on the screen.
+    let words: Vec<String> = (1..=30).map(|i| format!("word{i:02}")).collect();
+    update(&mut m, Msg::Paste(words.join(" ")));
+    let out = frame(&m, 150, 40);
+    for w in &words {
+        assert!(out.contains(w.as_str()), "{w} is not on the screen:\n{out}");
+    }
+}

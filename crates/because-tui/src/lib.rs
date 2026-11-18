@@ -21,7 +21,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
-use ratatui_textarea::TextArea;
+use ratatui_textarea::{TextArea, WrapMode};
 use because_core::{
     AgentEvent, Origin, Commit, Decision, FileChange, Fixture, Hunk, HunkRef, NarrationStep, PermissionRequest, Risk,
     SegStatus, Section, Segment, Session, StepKind, Usage,
@@ -1677,7 +1677,58 @@ fn new_composer() -> TextArea<'static> {
     ta.set_placeholder_text("type the next input · Enter to send");
     ta.set_placeholder_style(Style::default().fg(DIM));
     ta.set_cursor_line_style(Style::default());
+    // Wraps long lines onto more rows instead of a horizontal scroll.
+    ta.set_wrap_mode(WrapMode::WordOrGlyph);
     ta
+}
+
+/// The height of the composer for `width` columns: its wrapped rows and two
+/// borders. It grows from three rows to eight rows, and then it scrolls.
+fn composer_height(m: &Model, width: u16) -> u16 {
+    let inner = width.saturating_sub(2) as usize;
+    let rows: usize = m.composer.lines().iter().map(|l| wrapped_rows(l, inner)).sum();
+    (rows.min(u16::MAX as usize) as u16 + 2).clamp(3, 8)
+}
+
+/// The number of screen rows that `line` uses in `width` columns. This
+/// follows the `WordOrGlyph` rule of `ratatui-textarea`: break at word
+/// bounds, and break a word that is wider than a row at a grapheme.
+fn wrapped_rows(line: &str, width: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+    let width = width.max(1);
+    let gw = |g: &str| if g == "\t" { 4 } else { g.width() };
+    // `rows` counts the closed rows. `used` is the width of the open row.
+    let mut rows = 0;
+    let mut used = 0;
+    for word in line.split_word_bounds() {
+        let w: usize = word.graphemes(true).map(gw).sum();
+        if used + w <= width {
+            used += w;
+            continue;
+        }
+        if used > 0 {
+            rows += 1;
+            used = 0;
+            if w <= width {
+                used = w;
+                continue;
+            }
+        }
+        // A word wider than a row breaks at graphemes. The last part closes
+        // its row, so the next word starts on a new row.
+        rows += 1;
+        let mut part = 0;
+        for g in word.graphemes(true) {
+            let w = gw(g);
+            if part > 0 && part + w > width {
+                rows += 1;
+                part = 0;
+            }
+            part += w;
+        }
+    }
+    (rows + usize::from(used > 0)).max(1)
 }
 
 fn set_focus(m: &mut Model, i: usize) {
@@ -1981,7 +2032,7 @@ fn segments_column(m: &Model, f: &mut Frame, b: Rect) {
         (Origin::New, true) => "Segments · verbatim",
         (Origin::New, false) => "Segments",
     };
-    let composer_h = (m.composer.lines().len() as u16 + 2).clamp(3, 8);
+    let composer_h = composer_height(m, b.width);
     let [list_area, composer_area] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(composer_h)]).areas(b);
     let focused = m.focus == Focus::Segments;
@@ -2782,7 +2833,7 @@ fn rationale(m: &Model, f: &mut Frame, area: Rect, c: &FileChange) {
 fn reader(m: &Model, f: &mut Frame, area: Rect) {
     let Some(s) = m.selected_segment() else { return };
     let with_composer = m.reader_has_composer();
-    let composer_h = if with_composer { (m.composer.lines().len() as u16 + 2).clamp(3, 8) } else { 0 };
+    let composer_h = if with_composer { composer_height(m, area.width) } else { 0 };
     let [area, composer_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(composer_h)]).areas(area);
     // Borders and one column of padding each side.
     let lines = reader_lines(m, s, area.width.saturating_sub(4) as usize);
