@@ -90,16 +90,23 @@ fn find_program(explicit: Option<String>) -> anyhow::Result<PathBuf> {
     if let Some(p) = explicit {
         return Ok(PathBuf::from(p));
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::home_dir().unwrap_or_default();
+    // On Windows, the native installer writes `claude.exe`, and npm writes `claude.cmd`.
+    let names: &[&str] = if cfg!(windows) { &["claude.exe", "claude.cmd"] } else { &["claude"] };
     let on_path = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).map(|d| d.join("claude")).collect::<Vec<_>>())
+        .map(|p| std::env::split_paths(&p).flat_map(|d| names.iter().map(move |n| d.join(n))).collect::<Vec<_>>())
         .unwrap_or_default();
-    let fallbacks = [
-        home.join(".claude/local/claude"),
-        home.join(".local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-    ];
+    let fallbacks: Vec<PathBuf> = if cfg!(windows) {
+        let npm = std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("npm").join("claude.cmd"));
+        [Some(home.join(".local").join("bin").join("claude.exe")), npm].into_iter().flatten().collect()
+    } else {
+        vec![
+            home.join(".claude/local/claude"),
+            home.join(".local/bin/claude"),
+            PathBuf::from("/opt/homebrew/bin/claude"),
+            PathBuf::from("/usr/local/bin/claude"),
+        ]
+    };
     for c in on_path.iter().chain(fallbacks.iter()) {
         if is_executable(c) {
             return Ok(c.clone());

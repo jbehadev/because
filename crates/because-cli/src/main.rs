@@ -922,7 +922,8 @@ fn open_live(
 
 /// Run a shell command (`!`) in a tree, with the shell of the developer, and
 /// send `Msg::ShellDone` when it stops. Stdout and stderr go to one pipe, so
-/// that the output keeps its order. Returns the process group of the command.
+/// that the output keeps its order. Returns the process ID of the command. On
+/// Unix, this ID is also the process group of the command.
 fn run_shell(
     dir: &std::path::Path,
     command: &str,
@@ -931,24 +932,17 @@ fn run_shell(
     tx: std::sync::mpsc::Sender<In>,
 ) -> std::io::Result<u32> {
     use std::io::Read;
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
     let (mut out, w) = std::io::pipe()?;
     let started = std::time::Instant::now();
     // The command has no terminal: the TUI has it. A command that reads its
     // input gets end of file.
-    let mut child = Command::new(shell)
-        .arg("-c")
-        .arg(command)
+    let mut child = shell_command(command)
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(w.try_clone()?)
         .stderr(w)
-        // A group of its own, so that a stop also stops the processes that
-        // the command starts.
-        .process_group(0)
         .spawn()?;
     let pgid = child.id();
     std::thread::spawn(move || {
@@ -972,14 +966,45 @@ fn run_shell(
     Ok(pgid)
 }
 
+/// The command for `!` on Unix: `$SHELL -c` (or `/bin/sh -c`), in a process
+/// group of its own. Thus a stop also stops the processes that the command
+/// starts.
+#[cfg(unix)]
+fn shell_command(command: &str) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+    let mut c = std::process::Command::new(shell);
+    c.arg("-c").arg(command).process_group(0);
+    c
+}
+
+/// The command for `!` on Windows: `%ComSpec% /C` (or `cmd.exe /C`). The text
+/// goes to `cmd.exe` without changes, because `cmd.exe` does its own parse.
+#[cfg(windows)]
+fn shell_command(command: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let shell = std::env::var("ComSpec").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "cmd.exe".into());
+    let mut c = std::process::Command::new(shell);
+    c.arg("/C").raw_arg(command);
+    c
+}
+
 /// Stop a shell command and the processes that it started.
+#[cfg(unix)]
 fn stop_shell(pgid: u32) -> std::io::Result<()> {
-    let status = std::process::Command::new("kill")
-        .args(["-TERM", "--", &format!("-{pgid}")])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    if status.success() { Ok(()) } else { Err(std::io::Error::other(format!("kill exited with {status}"))) }
+    run_quiet(std::process::Command::new("kill").args(["-TERM", "--", &format!("-{pgid}")]))
+}
+
+/// Stop a shell command and the processes that it started. `taskkill /T`
+/// stops the tree of processes below the command.
+#[cfg(windows)]
+fn stop_shell(pid: u32) -> std::io::Result<()> {
+    run_quiet(std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]))
+}
+
+fn run_quiet(c: &mut std::process::Command) -> std::io::Result<()> {
+    let status = c.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()?;
+    if status.success() { Ok(()) } else { Err(std::io::Error::other(format!("{c:?} exited with {status}"))) }
 }
 
 /// How often the subscription's allowance is re-asked. It only moves as work is
